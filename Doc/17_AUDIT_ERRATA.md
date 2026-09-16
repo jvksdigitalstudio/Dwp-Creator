@@ -1,0 +1,46 @@
+# 17 — ERRATA DE LA AUDITORÍA ANTERIOR (auditoría de la auditoría)
+
+Este documento es el resultado de aplicar el "Prompt maestro final" a la documentación de las Fases 0 y 1 ya existentes en `Doc/`. Cada fila es un error real, verificado de nuevo desde cero (código, binario, o conteo directo), no una suposición. Formato exigido: `documento | afirmación | estado real | evidencia | corrección`.
+
+## Errores de contenido técnico (los más importantes)
+
+| # | Documento | Afirmación original | Estado real | Evidencia | Corrección |
+|---|---|---|---|---|---|
+| E-01 | `05_DWP_IMPLEMENTATION_AUDIT.md`, `06_BINARY_FORMAT_MODEL.md`, y el propio código (`DwpBlock.kt` línea 32) | "`0x01f4`: byte0=lowKey, byte1=rootKey, byte2=highKey" | 🔴 **INCORRECT** — el orden real es **byte0=rootKey, byte1=lowKey, byte2=highKey** | `[BINARY]` Verificado sobre las 48 muestras: `byte0` coincide EXACTAMENTE con la nota propia de cada sample (36+índice) en **48 de 48 casos, sin una sola excepción**. `byte1` coincide con la nota propia en 47 de 48 casos, fallando únicamente en la muestra 0 (donde vale 0 en vez de 36) — exactamente el patrón esperado de "extender el límite inferior de la zona más grave hasta la nota 0", que es una extensión de **límite**, no de **raíz** (la raíz de un sample nunca debería re-mapearse). Ver metodología completa en `05_DWP_IMPLEMENTATION_AUDIT.md` (sección actualizada). | El orden físico correcto es **ROOT, LOW, HIGH** en offsets 0/1/2. Esto es exactamente lo que advertía la Sección 15 del prompt maestro nuevo — se acepta la corrección. |
+| E-02 | Código real: `DwpEngine.listSamples()` (líneas ~168-170) | `val lowKey = keyRange.getOrNull(0)`, `val rootKey = keyRange.getOrNull(1)` | 🔴 **INCORRECT** (bug real, confirmado, no solo de documentación) | `[CODE]`+`[BINARY]`: consecuencia directa de E-01. El código lee las posiciones correctas del array, pero les asigna la etiqueta equivocada — `SampleInfo.lowKey` recibe en realidad el valor de ROOT, y `SampleInfo.rootKey` recibe en realidad el valor de LOW. | Ver `BUG-02` (nuevo) en `12_KNOWN_ISSUES.md`. **No se corrige en esta pasada** (regla de orden del prompt: documentar antes de implementar); queda como corrección prioritaria para la próxima fase que toque código. |
+| E-03 | `09_TEST_AUDIT.md` | "`WavDecoderTest.kt` (11 tests)" | 🔴 **INCORRECT** | `[CODE]`: conteo directo (`grep -c "@Test"` + lectura completa del archivo) da **9 tests**, no 11. | Corregido en `09_TEST_AUDIT.md` (esta revisión). |
+| E-04 | `09_TEST_AUDIT.md` | "`PcmConverterTest.kt` (7 tests)" | 🔴 **INCORRECT** | `[CODE]`: conteo directo da **6 tests**, no 7. | Corregido en `09_TEST_AUDIT.md` (esta revisión). |
+| E-05 | `09_TEST_AUDIT.md` | "Total: 26 métodos `@Test`" | 🟠 **NEEDS CORRECTION** (desactualizado, no solo por E-03/E-04 sino también por los 4 tests añadidos en Fase 1) | `[CODE]`: conteo fresco actual = **32 tests** (9+6+13+4 = 32; `DwpEngineTest` pasó de 9 a 13 tests tras la Fase 1). | Corregido en `09_TEST_AUDIT.md`. |
+
+## Confirmaciones (la auditoría anterior acertó en esto — se valida, no se repite ciegamente)
+
+| # | Documento | Afirmación | Estado | Evidencia re-verificada ahora |
+|---|---|---|---|---|
+| C-01 | `16_PHASE1_CHANGES.md` | "`tokenizeStrict()` existe y se usa en `renameRecursive`/`patchFrameCount`/`replaceSampleAudio`, `listSamples` sigue usando la variante permisiva" | 🟢 **CONFIRMED** | `[CODE]`: `grep` fresco confirma exactamente esas 3 ubicaciones de uso + la definición de la función + el uso deliberado de `tokenize` (no strict) en `listSamples`. |
+| C-02 | `05_DWP_IMPLEMENTATION_AUDIT.md` | "`0x0205`/`0x0206` no existen en el archivo" | 🟢 **CONFIRMED** (reforzado) | `[BINARY]`: esta vez se escaneó recursivamente **todos los niveles** del archivo (no solo top-level y un sample), confirmando ausencia total. |
+| C-03 | `05_DWP_IMPLEMENTATION_AUDIT.md` | "`0x01f7` offsets 0/8/16/36 coinciden con frameCount/channels/sampleRate/bitsPerSample reales" | 🟢 **CONFIRMED**, pero ver E-06 abajo para una matización importante | `[BINARY]`: re-verificado contra las 48 muestras, no solo la muestra 0. |
+| C-04 | `05_DWP_IMPLEMENTATION_AUDIT.md` | "El motor `DwpEngine` usa lista plana, preserva duplicados de tag" | 🟢 **CONFIRMED** | `[CODE]`+`[BINARY]`: reconfirmado; `0x0204` aparece como 16 bloques separados del mismo tag, todos preservados. |
+
+## Hallazgo nuevo, no cubierto en la auditoría anterior (no era un error, era una omisión)
+
+| # | Área | Hallazgo | Evidencia | Clasificación |
+|---|---|---|---|---|
+| E-06 | `0x01f7` (formato de audio) | **Los 10 campos del bloque son 100% constantes en las 48 muestras del archivo** (incluido `frameCount`, idéntico en todas: 378000) | `[BINARY]`: verificado campo por campo, `len(set(columna))==1` para los 10 offsets, en las 48 muestras | 🟠 **NEEDS CORRECTION** de alcance: la auditoría anterior no advertía que este fixture, al tener todas las muestras con parámetros idénticos, **no aporta ninguna evidencia interna** sobre qué offsets varían con loop/bit-depth/canales distintos. Las hipótesis de `loopMode`/`loopStart`/`loopEnd` (offsets 20/24/28) siguen exactamente igual de infundadas que antes — este archivo no puede confirmarlas ni refutarlas. Se necesita un segundo `.dwp` de referencia con muestras looped y/o de distinto bit-depth para progresar aquí. |
+| E-07 | `0x0204` (matriz de modulación) | La auditoría anterior lo documentó como "opaco, cero por defecto" sin conectar la estructura física con ninguna hipótesis semántica | `[BINARY]`: 16 instancias del tag `0x0204`, cada una de exactamente 8 bytes — coincide estructuralmente, byte a byte, con la hipótesis de la Sección 23 del nuevo prompt maestro (`u16 source + u16 target + f32 amount` = 8 bytes) | 🟡 **PARTIALLY CONFIRMED**: la estructura física (16 slots × 8 bytes) es consistente con la hipótesis; el **significado** de los valores `source=2, target=2` (el único slot no-cero, idéntico en las 48 muestras) sigue siendo ⚫ **UNKNOWN** — no hay evidencia de qué índice de source/target corresponde a qué modulador/destino real. |
+
+## Corrección de un overclaim de esta misma auditoría de auditoría
+
+La primera versión de este documento afirmaba, sin haberlo verificado línea por línea todavía, que `00, 01, 02, 04, 07, 08, 10, 11, 15` estaban "revisados, sin errores". Al hacer la verificación real (por petición explícita del usuario: *"toda la doc MD lo actualizaste entonces"*), se encontraron más errores. Se documentan aquí para no repetir el mismo problema que motivó este prompt: no basta con decir "revisado", hay que demostrarlo.
+
+| # | Documento | Afirmación original | Estado real | Evidencia | Corrección |
+|---|---|---|---|---|---|
+| E-08 | `00_PROJECT_AUDIT.md` | "30 archivos Kotlin, ~3.100 líneas" | 🟠 **NEEDS CORRECTION** | `[CODE]`: conteo fresco = **33 archivos** `.kt` (29 main + 4 test) | Corregido. |
+| E-09 | `11_DOCUMENTATION_AUDIT.md` | "Existe un motor DWP completo y probado (... + 8 tests contra archivo real)" | 🟠 **NEEDS CORRECTION** | `[CODE]`: eran 9 tests en Fase 0 (no 8; la tabla del propio `09_TEST_AUDIT.md` original ya listaba 9 filas bajo un encabezado que decía "8" — inconsistencia interna del documento original), ahora 13 tras Fase 1 | Corregido a "13 tests". |
+| E-10 | `02_REAL_ARCHITECTURE.md` (línea 80), `15_AUDIT_CONCLUSIONS.md` (línea 10) | "`BUG-01` sigue roto: `MainActivity` no conecta los callbacks" | 🟠 **NEEDS CORRECTION** (desactualizado por la propia Fase 1, no un error original) | `[CODE]`: en Fase 1 se retiraron las opciones "Renombrar"/"Eliminar" individuales de `SampleRow`/`MainScreen` — `BUG-01` está **mitigado**, no roto | Corregido en ambos documentos. |
+| E-11 | `15_AUDIT_CONCLUSIONS.md` (línea 23) | "`0x01f4` key range: low/root/high en bytes 0/1/2" | 🔴 **INCORRECT** — mismo error que E-01, no se había propagado la corrección a este documento | `[BINARY]` ver E-01 | Corregido a `root/low/high`. |
+| E-12 | **Reclasificación de severidad de `BUG-02`** (no un error de documento, sino un hallazgo incompleto de esta misma auditoría de auditoría) | `12_KNOWN_ISSUES.md`/`13_RISK_REGISTER.md` clasificaban `BUG-02` como severidad MEDIUM, "no destructivo, solo lectura/UI" | 🔴 **INCORRECT** — la severidad real es mayor | `[CODE]`: `DwpCreatorViewModel.kt` línea 167: `samples.firstOrNull { event.note in it.lowKey..it.highKey }` — usa `lowKey` para decidir qué sample suena ante una nota MIDI entrante. Con las etiquetas intercambiadas, el rango efectivo de la muestra 0 se calcula como `36..36` en vez de `0..36` (el `rootKey`, que ahora ocupa la posición de `lowKey`, vale 36 en vez del verdadero low=0). **Consecuencia real: las notas MIDI 0-35 no disparan ningún sample al hacer preview**, porque la muestra 1 empieza en 37. Esto es un bug funcional de reproducción, no solo un problema de etiquetado en la UI. | Severidad subida a **HIGH** en `12_KNOWN_ISSUES.md` y `13_RISK_REGISTER.md`. |
+
+## Lección de proceso (para no repetirla)
+
+Afirmar "documento revisado, sin errores" sin re-ejecutar `grep`/lectura línea por línea contra el código actual es exactamente el tipo de auditoría superficial que el prompt maestro original prohíbe (Sección 62: "No declarar la auditoría terminada prematuramente"). La corrección aplicada aquí (E-08 a E-12) es el resultado de hacerlo de verdad, no de memoria.
+
