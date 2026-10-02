@@ -1,0 +1,113 @@
+name: Generate Baseline Profile
+
+# Deliberadamente aparte de `build.yml` (Doc/45/47): este workflow SOLO se
+# dispara a mano (`workflow_dispatch`), nunca en cada push a `main`. Así el
+# pipeline de release normal -- ya confirmado funcionando en tablet real --
+# no depende en absoluto de que la generación del Baseline Profile (que
+# necesita un emulador Android completo) salga bien.
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-baseline-profile:
+    runs-on: ubuntu-latest
+    # Doc/58: con Gradle Managed Devices (Docs 54-57) el error real
+    # `Unable to confirm activity launch completion` persistió incluso
+    # desactivando animaciones -- causa conocida: el emulador de GMD, en
+    # este entorno, no da suficiente control sobre el renderizado gráfico
+    # (no se puede pasar `-gpu swiftshader_indirect`, la mitigación real
+    # para ese error en emuladores sin GPU física). Este workflow usa en su
+    # lugar `reactivecircus/android-emulator-runner`, el mecanismo estándar
+    # que usa la mayoría de proyectos Android reales en GitHub Actions para
+    # pruebas instrumentadas -- sí permite pasar esas opciones.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Ensure required Android SDK packages
+        # Solo lo que Gradle necesita para COMPILAR -- el emulador en sí
+        # ahora lo arranca y gestiona `reactivecircus/android-emulator-runner`
+        # por su cuenta, con su propia imagen de sistema.
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.6
+
+      # Habilita KVM (virtualización por hardware) en el runner de GitHub --
+      # sigue haciendo falta con este mecanismo también, lo recomienda la
+      # propia documentación de la Action de abajo.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Arranca un emulador real, lo conecta por adb (Gradle lo ve como
+      # "dispositivo conectado", no uno gestionado por sí mismo -- ver
+      # `useConnectedDevices = true` en `app/build.gradle.kts`) y ejecuta la
+      # generación del perfil DENTRO de esa misma sesión, mientras el
+      # emulador sigue vivo. `-gpu swiftshader_indirect` es la mitigación
+      # real, documentada, para el error `Unable to confirm activity launch
+      # completion` en emuladores sin aceleración gráfica por hardware.
+      - name: Generate Baseline Profile
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          force-avd-creation: false
+          disable-animations: true
+          disable-spellchecker: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: gradle :app:generateReleaseBaselineProfile --stacktrace
+
+      # Diagnóstico (Doc/50): en vez de asumir una ruta fija, se lista dónde
+      # quedó realmente cualquier archivo de perfil.
+      - name: Locate generated profile files
+        if: always()
+        run: |
+          echo "=== baseline-prof / *.prof / baselineProfiles (fuera de .gradle) ==="
+          find . \( -path ./.git -o -path ./.gradle \) -prune -o \
+            \( -iname "*baseline-prof*" -o -iname "*.prof" -o -ipath "*baselineProfiles*" \) \
+            -type f -print -exec wc -c {} \; 2>/dev/null || true
+          echo "=== app/src/*/generated ==="
+          find app/src -path "*generated*" -type f 2>/dev/null || true
+          echo "=== baselineprofile/build/outputs ==="
+          find baselineprofile/build/outputs -type f 2>/dev/null | head -100 || true
+          echo "=== RESULTADO DEL TEST (XML) ==="
+          find baselineprofile/build -name "TEST-*.xml" -exec head -c 5000 {} \; 2>/dev/null || true
+          echo "=== test-results.log (final) ==="
+          find baselineprofile/build -name "test-results.log" -exec tail -n 60 {} \; 2>/dev/null || true
+          echo "=== additional_output (donde Macrobenchmark deja el perfil) ==="
+          find baselineprofile -ipath "*additional_output*" 2>/dev/null | head -50 || true
+          echo "=== logcat / crash de la app ==="
+          find baselineprofile/build -iname "*logcat*" -type f -exec echo "--- {} ---" \; -exec tail -c 20000 {} \; 2>/dev/null || true
+          echo "=== HTML del reporte de test ==="
+          find baselineprofile/build/reports -name "*.html" -type f 2>/dev/null | head -20 || true
+          echo "=== carpetas de baselineprofile/build/outputs ==="
+          find baselineprofile/build/outputs -maxdepth 3 -type d 2>/dev/null || true
+
+      - name: Upload Baseline Profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-prof
+          path: |
+            app/src/**/generated/**
+            **/baseline-prof*.txt
+            baselineprofile/build/outputs/**
+          if-no-files-found: warn

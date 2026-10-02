@@ -1,0 +1,39 @@
+# Baseline Profile de DwpCreator -- ver Doc/46.
+#
+# Este archivo, empaquetado dentro del APK, es lo que
+# `androidx.profileinstaller` (ya añadido en `app/build.gradle.kts`) usa
+# para decirle a ART qué clases/métodos compilar por adelantado (AOT) en
+# los primeros arranques de la app, en vez de esperar al JIT normal -- la
+# pieza que le falta a este proyecto para la fluidez "de fábrica" desde el
+# primer scroll, no solo después de que el runtime "calienta".
+#
+# DELIBERADAMENTE VACÍO por ahora (solo comentarios, formato válido: no
+# rompe el empaquetado). No se rellenó con reglas escritas a mano porque el
+# formato real (`HSPLcom/paquete/Clase;->metodo(Ljava/lang/String;)V` por
+# cada método real, con el flag correcto H/S/P) depende de firmas de método
+# exactas del bytecode compilado -- adivinarlas sin poder compilar y
+# perfilar aquí mismo es exactamente el tipo de "reemplazo no verificado"
+# que este proyecto pidió evitar. Rellenarlo con líneas inventadas sería
+# peor que dejarlo vacío: silenciosamente no aportaría nada, o en el peor
+# caso el empaquetador podría rechazar una firma mal formada y romper el
+# build de release que ya está funcionando.
+#
+# Cómo se genera de verdad (próximo paso, pendiente y explícito -- no
+# incluido en este cambio):
+#   1. Un módulo `:baselineprofile` con un test instrumentado de
+#      Macrobenchmark (`androidx.benchmark.macro.junit4.BaselineProfileRule`)
+#      que ejecuta el recorrido real del usuario: abrir la app, cargar un
+#      instrumento, scrollear la lista de 48 muestras -- el mismo escenario
+#      reportado en este hilo.
+#   2. Ese test corre en un dispositivo/emulador real (requiere un runner
+#      con emulador en GitHub Actions, p. ej. `reactivecircus/android-emulator-runner`,
+#      o un dispositivo físico conectado) y produce las reglas reales.
+#   3. El plugin `androidx.baselineprofile` copia ese resultado aquí
+#      automáticamente.
+#
+# No se implementó en el mismo cambio que el resto (migración a Kotlin
+# 2.0/K2) para no acoplar el pipeline de release -- que recién quedó
+# funcionando -- a infraestructura de emulador nueva sin poder verificar
+# aquí las versiones exactas de los plugins involucrados (no hay acceso a
+# red en este entorno para confirmarlas). Se hace como paso aparte,
+# deliberado, cuando se confirme que este cambio no rompió nada.
