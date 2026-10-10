@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature
+        android:name="android.software.midi"
+        android:required="false" />
+
+    <!--
+      largeHeap: la app mantiene en memoria TODO el audio del instrumento cargado
+      (audioByIndex; ~150 MB para el instrumento de referencia de 48 muestras) y
+      exportar/decodificar necesita margen extra por encima de eso. Con el límite
+      de heap estándar de Android (que en muchos dispositivos ronda los 256 MB o
+      menos) ese perfil de uso corre riesgo real de OutOfMemoryError.
+    -->
+    <application
+        android:name=".DwpCreatorApplication"
+        android:allowBackup="true"
+        android:largeHeap="true"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.DwpCreator"
+        android:supportsRtl="true">
+
+        <!--
+            Doc/61: requisito documentado de Android para poder perfilar una
+            build de RELEASE (no depurable) con Macrobenchmark / Baseline
+            Profile. Sin esta etiqueta, el sistema le niega a esas
+            herramientas la introspección necesaria sobre el proceso de la
+            app: coincide exactamente con el patrón visto, el mismo error
+            (Unable to confirm activity launch completion) se repitió
+            idéntico sin importar el emulador, la GPU o las animaciones,
+            porque nunca fue un problema de esas tres cosas. No afecta a
+            builds normales instaladas desde fuera del shell (adb/CI) ni
+            hace la app profilable para nadie ajeno al propio dispositivo.
+        -->
+        <profileable android:shell="true" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.DwpCreator">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
