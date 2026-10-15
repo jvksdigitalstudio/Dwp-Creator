@@ -1,0 +1,169 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Si haces varios push seguidos, cancela la compilación anterior en vez de
+# gastar minutos de Actions compilando una versión que ya quedó vieja.
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Ensure required Android SDK packages
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -n 1)
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.6
+
+      - name: Verify architecture rules (module dependencies, no cycles, one type per file)
+        # Falla rápido, sin compilar nada: ver tools/check_architecture.py y Doc/72.
+        run: python3 tools/check_architecture.py
+
+      - name: Run unit tests (all modules; DWP core verified against real Instrument.dwp)
+        # Un test que falla (o un error de compilación SOLO en los tests) no debe impedir que se
+        # genere el APK para probarlo en el dispositivo: el resultado de las pruebas se sigue
+        # reportando abajo y el último paso marca la corrida en rojo si fallaron.
+        id: tests
+        continue-on-error: true
+        # Módulos de Kotlin puro -> `test`; módulos Android -> `testDebugUnitTest`.
+        # `--continue`: que un módulo en rojo no oculte el resultado de los demás.
+        run: >
+          gradle
+          :core:codec:test :core:dwp:test :core:sampler-api:test :core:sampler-engine:test
+          :platform:midi:testDebugUnitTest :platform:sampler-android:testDebugUnitTest :app:testDebugUnitTest
+          --continue --stacktrace
+
+      - name: Summarize test results (from real JUnit XML reports)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          patterns = [
+              "*/*/build/test-results/test/*.xml",              # core/<módulo> (Kotlin puro)
+              "*/*/build/test-results/testDebugUnitTest/*.xml",  # platform/<módulo> (Android)
+              "app/build/test-results/testDebugUnitTest/*.xml",  # app
+          ]
+          files = sorted(f for p in patterns for f in glob.glob(p))
+          if not files:
+              print("::error::No JUnit XML reports found under <módulo>/build/test-results/")
+              print("Tests detected: 0")
+              print("Tests executed: 0")
+              print("Tests passed: 0")
+              print("Tests failed: 0")
+              print("Tests skipped: 0")
+              print("BUILD FAILED (no test reports produced)")
+              sys.exit(1)
+
+          total = failures = errors = skipped = 0
+          per_module = {}
+          for f in files:
+              root = ET.parse(f).getroot()
+              module = f.split("/build/")[0]
+              t = int(root.attrib.get("tests", 0))
+              fl = int(root.attrib.get("failures", 0)) + int(root.attrib.get("errors", 0))
+              total += t
+              failures += int(root.attrib.get("failures", 0))
+              errors += int(root.attrib.get("errors", 0))
+              skipped += int(root.attrib.get("skipped", 0))
+              counts = per_module.setdefault(module, [0, 0])
+              counts[0] += t
+              counts[1] += fl
+
+          executed = total - skipped
+          passed = executed - failures - errors
+          failed = failures + errors
+
+          for module, (t, fl) in sorted(per_module.items()):
+              print(f"  {module:26s} {t:4d} tests, {fl} failed")
+          print(f"Test report files parsed: {len(files)}")
+          print(f"Tests detected: {total}")
+          print(f"Tests executed: {executed}")
+          print(f"Tests passed: {passed}")
+          print(f"Tests failed: {failed}")
+          print(f"Tests skipped: {skipped}")
+          print("BUILD FAILED (tests)" if failed > 0 else "BUILD SUCCESSFUL (tests)")
+
+          sys.exit(1 if failed > 0 else 0)
+          PY
+
+      - name: Sampler engine benchmark report (real timings measured in this CI run)
+        # El benchmark corre como parte de `:core:sampler-engine:test` (SamplerEngineBenchmarkTest) y
+        # escribe su informe aquí. Se imprime y se publica en el resumen de la corrida.
+        if: always()
+        run: |
+          report=core/sampler-engine/build/reports/sampler-benchmark/report.txt
+          if [ -f "$report" ]; then
+            cat "$report"
+            {
+              echo '### Sampler engine benchmark'
+              echo '```'
+              cat "$report"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No benchmark report was produced"
+          fi
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: |
+            */*/build/reports/tests/
+            app/build/reports/tests/
+            core/sampler-engine/build/reports/sampler-benchmark/
+
+      - name: Build release APK
+        # Las pruebas unitarias de arriba siguen corriendo sobre la variante
+        # debug (`testDebugUnitTest`) -- eso es correcto y no cambia, es
+        # solo la ejecución de tests. El APK que se instala y se prueba en
+        # un dispositivo real (el propósito de este job) ahora es `release`:
+        # con R8/minify/shrink activados de verdad (ver Doc/45 y
+        # `app/build.gradle.kts`), firmado con la config de debug de AGP
+        # para seguir siendo instalable directo desde este artefacto, sin
+        # gestionar un keystore de producción.
+        #
+        # `:app:` explícito (Doc/52): un `gradle assembleRelease` a nivel raíz
+        # construye TODOS los módulos, incluido `:baselineprofile` (Macrobenchmark),
+        # acoplando este APK a las dependencias de ese módulo de pruebas. Con
+        # `:app:` el APK depende solo de la propia app.
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DwpCreator-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Fail the run if the unit tests failed (the APK above was still built)
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::Unit tests failed or did not compile. The APK artifact was still built; see the unit-test-report artifact and the test step log."
+          exit 1

@@ -1,0 +1,6 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.DwpCreator" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0D0221</item>
+        <item name="android:windowBackground">#0D0221</item>
+    </style>
+</resources>
