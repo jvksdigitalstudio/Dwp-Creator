@@ -1,0 +1,44 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="11.76dp"
+    android:viewportWidth="500"
+    android:viewportHeight="245"
+    android:tint="#FFFFFFFF">
+    <!--
+        Icono "VSG premium" provisto por el usuario (triangle-up). Geometria
+        identica a la original (mismo triangulo: 4.5,372.5 to 494.5,372.5 to
+        249.5,127.5 sobre un viewBox de 0 0 500 500), pero el viewport se
+        recorto verticalmente para ajustarse exacto al bounding box del
+        triangulo (alto real 372.5-127.5 = 245, contra los 500 originales).
+
+        Motivo del recorte (Doc/37): el viewBox original de 500x500 dejaba
+        127.5 unidades de espacio vacio DEBAJO del triangulo (mismo margen
+        vacio que arriba, para centrarlo dentro de un cuadrado). Ese vacio
+        no se ve en el editor SVG porque ahi el triangulo se mira aislado,
+        pero en la app se traduce en un hueco real entre la punta visible
+        de la flecha y el footer (DwpStatusBar) que queda justo debajo: el
+        Icon de Compose escala el contenido con ContentScale.Fit centrado
+        dentro del tamano que le da su Modifier, asi que ese padding vertical
+        sobrevive sin importar cuanto se agrande o se achique el icono.
+
+        Recortar el viewport al propio triangulo (apice en y=0, base en
+        y=245) elimina ese margen en la fuente: ahora la base del triangulo
+        ES el borde inferior del vector. El composable que lo usa como
+        boton flotante (EffectsPanelToggleButton en EffectsPanel.kt) fija
+        ademas un alto de Modifier proporcional a este nuevo aspect ratio
+        (500:245) en vez de un cuadrado, para que Fit no vuelva a rellenar
+        ese hueco por su cuenta.
+
+        El color de relleno original (#000000) se sustituye en tiempo de uso
+        via el parametro `tint` de `Icon(...)` en Compose, por eso aqui el
+        `fillColor` del path es blanco puro: es solo la mascara de forma, el
+        color real lo decide cada composable que lo usa.
+
+        NOTA XML: un comentario XML no admite la secuencia de doble guion
+        dentro de su cuerpo (spec XML 1.0, seccion "Comments"); por eso este
+        comentario evita ese patron incluso al describirlo.
+    -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4.5,245 L494.5,245 L249.5,0 Z" />
+</vector>
